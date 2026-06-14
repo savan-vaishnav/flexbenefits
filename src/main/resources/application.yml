@@ -14,13 +14,13 @@ spring:
     locations: classpath:db/migration
 
 management:
-  endpoint:
+  endpoints:
     web:
       exposure:
         include: health,info,metrics
-    info:
-      env:
-        enabled: true
+  info:
+    env:
+      enabled: true
 
 info:
   app:
