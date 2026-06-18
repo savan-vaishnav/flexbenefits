@@ -39,3 +39,4 @@ out/
 ### Project=specific ###
 .env
 *.env.local
+data/

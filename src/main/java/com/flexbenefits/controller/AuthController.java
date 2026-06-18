@@ -96,6 +96,25 @@ public class AuthController {
         ));
     }
 
+    @PostMapping("/refresh")
+    public ResponseEntity<AuthResponse> refresh() {
+        var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !(auth.getPrincipal() instanceof User user)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        // Generate a new JWT token
+        String token = jwtService.generateToken(
+                user.getId(), user.getEmail(), user.getTenant().getId(), user.getRole().name()
+        );
+
+        log.info("Token refreshed for user: {}", user.getEmail());
+
+        return ResponseEntity.ok(new AuthResponse(
+                token, user.getId(), user.getTenant().getId(), user.getEmail(), user.getRole().name()
+        ));
+    }
+
     @GetMapping("/me")
     public ResponseEntity<AuthResponse> me() {
         // This endpoint requires authentication (JWT) — SecurityConfig enforces it
