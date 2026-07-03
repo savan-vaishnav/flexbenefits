@@ -36,7 +36,9 @@ out/
 ### VS Code ###
 .vscode/
 
-### Project=specific ###
+### Project-specific ###
 .env
 *.env.local
 data/
+docs/
+gradle.properties

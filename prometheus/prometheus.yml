@@ -1,0 +1,24 @@
+# Prometheus Configuration for FlexBenefits
+# Scrapes metrics from Spring Boot Actuator /actuator/prometheus endpoints
+
+global:
+  scrape_interval: 15s      # How often to pull metrics from targets
+  evaluation_interval: 15s  # How often to evaluate alerting rules
+
+scrape_configs:
+  # Benefits Service (port 8082)
+  - job_name: 'benefits-service'
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['benefits-service:8082']
+        labels:
+          service: 'benefits-service'
+
+  # Claims Service (port 8081)
+  - job_name: 'claims-service'
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['claims-service:8081']
+        labels:
+          service: 'claims-service'
+

@@ -886,6 +886,59 @@ Currently: enrollment starts as PENDING. PENDING → ACTIVE transition will be a
 ### What It Does
 Manages company/organization records. Each tenant is an isolated company on the platform. Tenants are the root entity — everything else belongs to a tenant.
 
+### Bootstrap: The PLATFORM Tenant & Super Admin
+
+**The chicken-and-egg problem:** You can't create a tenant via API without being authenticated, and you can't register a user without a tenant existing first.
+
+**Solution:** On first startup, `DataInitializer` automatically seeds:
+1. A **PLATFORM** tenant — the "meta" tenant that owns the platform itself
+2. A **Super Admin** user — the first user who can create new company tenants
+
+| Field | Value |
+|-------|-------|
+| Tenant Name | FlexBenefits Platform |
+| Tenant Code | PLATFORM |
+| Super Admin Email | `superadmin@flexbenefits.com` |
+| Default Password | `changeme123` |
+| Role | `SUPER_ADMIN` |
+
+**This is idempotent** — if the PLATFORM tenant already exists, the seeder skips.
+
+### The Complete Bootstrapping Flow
+
+```
+AUTOMATIC (on first app startup):
+  DataInitializer creates:
+    → PLATFORM tenant (code: "PLATFORM")
+    → Super Admin user (superadmin@flexbenefits.com / changeme123)
+
+MANUAL (Super Admin does these):
+  1. POST /api/v1/auth/login
+     → { "email": "superadmin@flexbenefits.com", "password": "changeme123" }
+     → Gets JWT token with role=SUPER_ADMIN
+
+  2. POST /api/v1/tenants  (requires SUPER_ADMIN role)
+     → { "name": "Acme Corporation", "code": "ACME" }
+     → Creates the "Acme Corp" tenant, returns tenantId
+
+  3. POST /api/v1/auth/register  (public endpoint)
+     → { "tenantId": "<acme-tenant-id>", "email": "hr@acme.com", "password": "..." }
+     → First user for Acme Corp is created (role: EMPLOYEE by default)
+```
+
+### Role-Based Access Control
+
+| Endpoint | Required Role | Why |
+|----------|--------------|-----|
+| `POST /api/v1/tenants` | `SUPER_ADMIN` | Only platform owner creates companies |
+| `GET /api/v1/tenants/{id}` | Any authenticated | Users can view their own tenant |
+| All other endpoints | Any authenticated | Tenant isolation via JWT `tenantId` |
+
+If a non-SUPER_ADMIN user tries to create a tenant, they get:
+```json
+{ "status": 403, "message": "Access denied — insufficient permissions", "timestamp": "..." }
+```
+
 ### Files Involved
 
 ```
@@ -916,7 +969,7 @@ tenants (
 
 #### POST `/api/v1/tenants` — Create Company
 ```
-Auth Required: Yes (future: SUPER_ADMIN only)
+Auth Required: Yes (SUPER_ADMIN role only — enforced via @PreAuthorize)
 
 Request:
 {
@@ -926,6 +979,7 @@ Request:
 }
 
 Business Rules:
+  - Caller must have SUPER_ADMIN role (403 if not)
   - Code must be unique (409 if duplicate)
   - Code is always stored uppercase
 
@@ -940,6 +994,7 @@ Response (201):
 }
 
 Errors:
+  403 → Not a SUPER_ADMIN
   409 → "Tenant with code already exists: ACME"
   400 → Validation error (missing name or code)
 ```
@@ -979,6 +1034,7 @@ All exceptions thrown from any controller are caught centrally:
 | Exception | HTTP Status | When |
 |-----------|------------|------|
 | `ResourceNotFoundException` | 404 | findById returns empty |
+| `AccessDeniedException` | 403 | User lacks required role (e.g., non-SUPER_ADMIN creating tenant) |
 | `BadCredentialsException` | 401 | Wrong password on login |
 | `IllegalStateException` | 409 | Business rule violation (wrong status, duplicate, etc.) |
 | `MethodArgumentNotValidException` | 400 | @Valid fails (@NotNull, @NotBlank, etc.) |
@@ -1007,7 +1063,7 @@ IdempotencyFilter:
 - **Only on POST/PUT/PATCH:** GET and DELETE are already idempotent
 - **24h TTL:** Keys auto-expire from Redis
 
-### Security (`SecurityConfig`)
+### Security (`SecurityConfig` + `@PreAuthorize`)
 
 ```
 Public (no JWT):              Protected (JWT required):
@@ -1016,6 +1072,9 @@ Public (no JWT):              Protected (JWT required):
   /actuator/**                  /api/v1/enrollments/**
   /swagger-ui/**                /api/v1/tenants/**
   /v3/api-docs/**               everything else
+
+Role-restricted (method-level @PreAuthorize):
+  POST /api/v1/tenants          → SUPER_ADMIN only
 ```
 
 ### Multi-Tenancy Pattern
@@ -1056,25 +1115,38 @@ curl http://localhost:8080/api/v1/ping
 
 ```bash
 # ============================================
-# STEP 1: Create a tenant
+# STEP 0: App starts → DataInitializer seeds PLATFORM tenant + Super Admin
+# Check logs for: "✅ Seeded PLATFORM tenant" and "✅ Seeded SUPER_ADMIN user"
+# ============================================
+
+# ============================================
+# STEP 1: Login as Super Admin
+# ============================================
+curl -s -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"superadmin@flexbenefits.com","password":"changeme123"}'
+# → Note the "token" from response (this is a SUPER_ADMIN JWT)
+
+ADMIN_TOKEN="<paste super admin token here>"
+
+# ============================================
+# STEP 2: Create a tenant (requires SUPER_ADMIN role)
 # ============================================
 curl -s -X POST http://localhost:8080/api/v1/tenants \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Acme Corporation","code":"ACME","contactEmail":"admin@acme.com"}'
 # → Note the tenant "id" from response
 
 # ============================================
-# STEP 2: Register a user for that tenant
+# STEP 3: Register a user for that tenant (public endpoint)
 # ============================================
 curl -s -X POST http://localhost:8080/api/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{"tenantId":"<TENANT_ID>","email":"john@acme.com","password":"secret123","firstName":"John","lastName":"Doe"}'
-# → Note the "token" from response
+# → Note the "token" from response (this is an EMPLOYEE JWT for Acme)
 
-# ============================================
-# STEP 3: Use the token for all subsequent requests
-# ============================================
-TOKEN="<paste token here>"
+TOKEN="<paste employee token here>"
 
 # ============================================
 # STEP 4: Create a benefit plan
@@ -1151,7 +1223,7 @@ Open `http://localhost:8080/swagger-ui.html` in your browser to see all endpoint
 | 5 | POST | `/api/v1/auth/login` | No | Auth |
 | 6 | POST | `/api/v1/auth/refresh` | Yes | Auth |
 | 7 | GET | `/api/v1/auth/me` | Yes | Auth |
-| 8 | POST | `/api/v1/tenants` | Yes | Tenant |
+| 8 | POST | `/api/v1/tenants` | Yes (SUPER_ADMIN) | Tenant |
 | 9 | GET | `/api/v1/tenants/{id}` | Yes | Tenant |
 | 10 | POST | `/api/v1/plans` | Yes | Plan |
 | 11 | GET | `/api/v1/plans` | Yes | Plan |
@@ -1353,5 +1425,5 @@ Postgres has a healthcheck — the app won't start until Postgres is accepting c
 
 ---
 
-*Last updated: June 17, 2026*
+*Last updated: June 18, 2026*
 

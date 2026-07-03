@@ -1,1 +1,5 @@
 rootProject.name = 'flexbenefits'
+include 'benefits-service'
+include 'claims-service'
+include 'eureka-server'
+include 'api-gateway'

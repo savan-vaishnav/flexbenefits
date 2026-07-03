@@ -1,0 +1,146 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      globalcors:
+          cors-configurations:
+           '[/**]':
+            allowedOriginPatterns: "*"
+            allowedMethods:
+             - GET
+             - POST
+             - PUT
+             - DELETE
+             - PATCH
+             - OPTIONS
+            allowedHeaders: "*"
+            allowCredentials: true
+            maxAge: 3600
+      discovery:
+        locator:
+          enabled: false
+      routes:
+        # Auth routes (benefits-service) — public
+        - id: auth-service
+          uri: lb://benefits-service
+          predicates:
+            - Path=/api/v1/auth/**
+
+        # Tenant routes (benefits-service)
+        - id: tenant-service
+          uri: lb://benefits-service
+          predicates:
+            - Path=/api/v1/tenants/**
+
+        # Benefit Plan routes (benefits-service)
+        - id: plan-service
+          uri: lb://benefits-service
+          predicates:
+            - Path=/api/v1/plans/**
+
+        # Enrollment routes (benefits-service)
+        - id: enrollment-service
+          uri: lb://benefits-service
+          predicates:
+            - Path=/api/v1/enrollments/**
+
+        # Document routes (benefits-service)
+        - id: document-service
+          uri: lb://benefits-service
+          predicates:
+            - Path=/api/v1/claims/*/documents/**
+
+        # Claim routes (claims-service)
+        - id: claims-service
+          uri: lb://claims-service
+          predicates:
+            - Path=/api/v1/claims/**
+
+        # Ping routes — both services
+        - id: benefits-ping
+          uri: lb://benefits-service
+          predicates:
+            - Path=/api/v1/ping
+            - Header=X-Service, benefits
+
+        - id: claims-ping
+          uri: lb://claims-service
+          predicates:
+            - Path=/api/v1/ping
+            - Header=X-Service, claims
+
+        # Default ping goes to benefits
+        - id: default-ping
+          uri: lb://benefits-service
+          predicates:
+            - Path=/api/v1/ping
+
+        # Swagger API docs proxying (for gateway aggregation)
+        - id: benefits-api-docs
+          uri: lb://benefits-service
+          predicates:
+            - Path=/benefits/v3/api-docs/**
+          filters:
+            - StripPrefix=1
+
+        - id: claims-api-docs
+          uri: lb://claims-service
+          predicates:
+            - Path=/claims/v3/api-docs/**
+          filters:
+            - StripPrefix=1
+
+        # Actuator for benefits-service
+        - id: benefits-actuator
+          uri: lb://benefits-service
+          predicates:
+            - Path=/benefits/actuator/**
+          filters:
+            - StripPrefix=1
+
+        # Actuator for claims-service
+        - id: claims-actuator
+          uri: lb://claims-service
+          predicates:
+            - Path=/claims/actuator/**
+          filters:
+            - StripPrefix=1
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+    fetch-registry: true
+    register-with-eureka: true
+  instance:
+    prefer-ip-address: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    gateway:
+      enabled: true
+
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO
+
+# SpringDoc - Swagger UI aggregation on the gateway
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    urls:
+      - name: Benefits Service
+        url: /benefits/v3/api-docs
+      - name: Claims Service
+        url: /claims/v3/api-docs

@@ -1,28 +1,59 @@
 # FlexBenefits
 
-> Multi-tenant employee benefits & insurance claims platform built with Spring Boot 4, PostgreSQL, Redis, and MinIO.
+> Multi-tenant employee benefits & claims platform built with **microservices architecture** — Spring Boot 4, Kafka, Redis, Prometheus, Grafana, and 10 Docker containers.
 
-<!--
-![Build](https://img.shields.io/badge/build-passing-brightgreen)
-![Tests](https://img.shields.io/badge/tests-43%20passing-brightgreen)
 ![Java](https://img.shields.io/badge/Java-21-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-green)
--->
+![Build](https://img.shields.io/badge/build-passing-brightgreen)
 
 ---
 
 ## What Is This?
 
-FlexBenefits is a **SaaS backend** where companies manage their employees' health insurance plans and reimbursement claims. Think Workday Benefits or Pluxee — simplified.
+A **SaaS backend** where companies manage employee health insurance plans and reimbursement claims. Two independently deployable microservices communicate via REST and Kafka events, with full observability and resilience patterns.
 
 **Key flows:**
-1. Company (tenant) registers on the platform
-2. HR creates benefit plans (Medical, Dental, Vision)
-3. Employees enroll in plans
-4. Employees submit insurance claims with receipts
-5. Claims go through a lifecycle: DRAFT → SUBMITTED → APPROVED/REJECTED
+1. Company (tenant) registers → HR creates benefit plans (Medical, Dental, Vision)
+2. Employees enroll in plans → submit insurance claims with receipts
+3. Claims lifecycle: DRAFT → SUBMITTED → APPROVED/REJECTED
+4. Enrollment cancellation → Kafka event → auto-rejects pending claims
 
-**Built as a portfolio project** demonstrating production-grade backend engineering: multi-tenancy, JWT auth, file storage, idempotency, containerization, and comprehensive testing.
+---
+
+## Architecture
+
+```
+                              ┌──────────────────────┐
+                              │   API Gateway (:8080) │
+                              │  Spring Cloud Gateway │
+                              └──────────┬───────────┘
+                                         │
+                    ┌────────────────────┼─────────────────────┐
+                    │                    │                      │
+          ┌─────────▼──────────┐  ┌──────▼────────────┐  ┌────▼──────────┐
+          │ benefits-service   │  │ claims-service     │  │ Eureka Server │
+          │     (:8082)        │  │    (:8081)         │  │   (:8761)     │
+          │                    │  │                    │  └───────────────┘
+          │ Tenants, Employees │  │ Claims CRUD        │
+          │ Plans, Enrollments │  │ Claim submission   │
+          │ Auth (JWT)         │  │ Auto-rejection     │
+          │ Documents (MinIO)  │  │                    │
+          └──┬──┬──┬──┬───────┘  └──┬──┬──┬──┬───────┘
+             │  │  │  │              │  │  │  │
+     ┌───────┘  │  │  └──────┐  ┌───┘  │  │  └────────┐
+     ▼          ▼  ▼         ▼  ▼      ▼  ▼           ▼
+ PostgreSQL  Redis MinIO   Kafka    PostgreSQL  Redis  Kafka
+ (flexbenefits)            │        (claimsdb)         │
+                           │                           │
+                    enrollment-events ──────────────────┘
+                    (async event-driven communication)
+
+          ┌───────────────┐    ┌───────────────┐
+          │  Prometheus   │───▶│    Grafana     │
+          │   (:9090)     │    │   (:3000)      │
+          │ Scrapes /actuator/prometheus from both services │
+          └───────────────┘    └───────────────┘
+```
 
 ---
 
@@ -30,50 +61,21 @@ FlexBenefits is a **SaaS backend** where companies manage their employees' healt
 
 | Layer | Technology |
 |-------|-----------|
-| **Framework** | Spring Boot 4.1, Spring Security, Spring Data JPA |
 | **Language** | Java 21 |
-| **Database** | PostgreSQL 16 + Flyway migrations |
-| **Cache** | Redis 7 (idempotency keys) |
-| **File Storage** | MinIO (S3-compatible object storage) |
-| **Auth** | JWT (jjwt) with tenant-scoped tokens |
+| **Framework** | Spring Boot 4.1, Spring Cloud 2025 |
+| **Architecture** | Microservices (2 services + gateway + service registry) |
+| **Service Discovery** | Netflix Eureka |
+| **API Gateway** | Spring Cloud Gateway |
+| **Messaging** | Apache Kafka (KRaft mode, async events) |
+| **Database** | PostgreSQL 16, Flyway migrations, database-per-service |
+| **Caching** | Redis 7 (`@Cacheable` with Kafka-driven eviction) |
+| **Resilience** | Resilience4j (circuit breaker, retry, rate limiter) |
+| **Auth** | JWT with tenant-scoped tokens |
+| **File Storage** | MinIO (S3-compatible) |
+| **Observability** | Micrometer + Prometheus + Grafana, structured JSON logging |
 | **API Docs** | SpringDoc OpenAPI 3 (Swagger UI) |
-| **Mapping** | MapStruct (compile-time entity ↔ DTO) |
-| **Testing** | JUnit 5 + Mockito + AssertJ (43 unit tests) |
-| **Containerization** | Docker multi-stage build + Docker Compose |
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         Client / Swagger UI                   │
-└───────────────────────────────┬─────────────────────────────┘
-                                │ HTTP + JWT
-┌───────────────────────────────▼─────────────────────────────┐
-│                    Spring Boot Application                    │
-│                                                              │
-│  ┌────────────┐  ┌────────────┐  ┌─────────────────────┐    │
-│  │  Security  │  │Idempotency │  │    REST Controllers  │    │
-│  │   Filter   │→│   Filter   │→│  (7 controllers)     │    │
-│  │  (JWT)     │  │  (Redis)   │  │                     │    │
-│  └────────────┘  └────────────┘  └──────────┬──────────┘    │
-│                                              │               │
-│  ┌───────────────────────────────────────────▼──────────┐    │
-│  │              Service Layer (business logic)           │    │
-│  │        Multi-tenancy enforced at every query          │    │
-│  └───────────────────────────────────────────┬──────────┘    │
-│                                              │               │
-│  ┌────────────┐  ┌────────────┐  ┌──────────▼──────────┐    │
-│  │   MinIO    │  │   Redis    │  │   PostgreSQL        │    │
-│  │  (files)   │  │  (cache)   │  │   (data + Flyway)   │    │
-│  └────────────┘  └────────────┘  └─────────────────────┘    │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Multi-Tenancy
-
-Every request carries a tenant identity via JWT. All database queries are scoped by `tenant_id`. Tenant A can never see Tenant B's data — enforced at the service layer.
+| **Testing** | JUnit 5, Mockito, AssertJ (42 unit tests) |
+| **Containerization** | Docker multi-stage builds, Docker Compose (10 containers) |
 
 ---
 
@@ -84,140 +86,129 @@ Every request carries a tenant identity via JWT. All database queries are scoped
 - Java 21+
 - Docker & Docker Compose
 
-### Option 1: Full Docker Stack (recommended)
+### Run Everything
 
 ```bash
-# Clone the repo
 git clone https://github.com/<your-username>/flexbenefits.git
 cd flexbenefits
 
-# Start everything (builds app + infra)
+# Start all 10 containers
 docker compose up --build -d
 
-# Verify
+# Wait ~90 seconds, then verify
 curl http://localhost:8080/api/v1/ping
-# → {"status":"UP","service":"flexbenefits","timestamp":"..."}
-
-# Open Swagger UI
-open http://localhost:8080/swagger-ui.html
 ```
 
-### Option 2: Local Development
+### Quick Test (demo data is auto-seeded)
 
 ```bash
-# Start infrastructure only
-docker compose up postgres redis minio -d
+# 1. Login as HR admin (seeded automatically)
+curl -s -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@demo.com","password":"admin123"}' | jq .token
 
-# Run the app
-./gradlew bootRun
+# 2. List benefit plans (use the token from step 1)
+curl -s http://localhost:8080/api/v1/plans \
+  -H "Authorization: Bearer <TOKEN>" | jq .
 
-# Run tests (no Docker needed)
+# 3. List enrollments (grab an enrollmentId for claims)
+curl -s http://localhost:8080/api/v1/enrollments \
+  -H "Authorization: Bearer <TOKEN>" | jq .
+
+# 4. Create a claim
+curl -s -X POST http://localhost:8080/api/v1/claims \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"employeeId":"<EMPLOYEE_ID>","enrollmentId":"<ENROLLMENT_ID>","serviceDate":"2026-07-01","providerName":"Dr. Smith","diagnosisCode":"J06.9","claimedAmount":1500.00}'
+```
+
+### Key URLs
+
+| Service | URL |
+|---------|-----|
+| API Gateway | http://localhost:8080 |
+| Eureka Dashboard | http://localhost:8761 |
+| Swagger UI (benefits) | http://localhost:8082/swagger-ui.html |
+| Swagger UI (claims) | http://localhost:8081/swagger-ui.html |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 (admin/admin) |
+| MinIO Console | http://localhost:9001 (minioadmin/minioadmin) |
+
+### Run Tests
+
+```bash
 ./gradlew test
 ```
 
 ---
 
-## API Endpoints (27 total)
+## API Endpoints
 
-### Health
-| Method | Endpoint | Auth |
-|--------|----------|------|
-| GET | `/api/v1/ping` | No |
-| GET | `/actuator/health` | No |
+All traffic goes through the API Gateway on port 8080.
 
-### Authentication
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| POST | `/api/v1/auth/register` | No | Create account |
-| POST | `/api/v1/auth/login` | No | Get JWT token |
-| POST | `/api/v1/auth/refresh` | Yes | Refresh token |
-| GET | `/api/v1/auth/me` | Yes | Current user info |
-
-### Tenants
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/tenants` | Create company |
-| GET | `/api/v1/tenants/{id}` | Get company details |
-
-### Benefit Plans
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/plans` | Create plan (admin) |
-| GET | `/api/v1/plans` | List active plans |
-| GET | `/api/v1/plans/{id}` | Get plan details |
-
-### Enrollments
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/enrollments` | Enroll in plan |
-| GET | `/api/v1/enrollments` | List enrollments |
-| GET | `/api/v1/enrollments/{id}` | Get enrollment |
-| DELETE | `/api/v1/enrollments/{id}` | Cancel enrollment |
-
-### Claims ⭐
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/claims` | Create claim (DRAFT) |
-| GET | `/api/v1/claims` | List claims (paginated) |
-| GET | `/api/v1/claims/{id}` | Get claim details |
-| PUT | `/api/v1/claims/{id}` | Update claim (DRAFT only) |
-| DELETE | `/api/v1/claims/{id}` | Delete claim (DRAFT only) |
-| PATCH | `/api/v1/claims/{id}/submit` | Submit claim |
-
-### Claim Documents
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/claims/{id}/documents` | Upload file |
-| GET | `/api/v1/claims/{id}/documents` | List documents |
-| GET | `/api/v1/claims/{id}/documents/{docId}` | Get metadata |
-| GET | `/api/v1/claims/{id}/documents/{docId}/download` | Download file |
-| DELETE | `/api/v1/claims/{id}/documents/{docId}` | Delete document |
-
-> All endpoints except auth/health require JWT. Use Swagger UI's **Authorize** button to paste your token.
+| Area | Method | Endpoint | Description |
+|------|--------|----------|-------------|
+| Auth | POST | `/api/v1/auth/register` | Create account |
+| Auth | POST | `/api/v1/auth/login` | Get JWT token |
+| Auth | POST | `/api/v1/auth/refresh` | Refresh token |
+| Auth | GET | `/api/v1/auth/me` | Current user info |
+| Tenants | POST | `/api/v1/tenants` | Create company |
+| Tenants | GET | `/api/v1/tenants/{id}` | Get company |
+| Plans | POST | `/api/v1/plans` | Create plan |
+| Plans | GET | `/api/v1/plans` | List plans (cached) |
+| Plans | GET | `/api/v1/plans/{id}` | Get plan (cached) |
+| Enrollments | POST | `/api/v1/enrollments` | Enroll in plan |
+| Enrollments | GET | `/api/v1/enrollments` | List enrollments |
+| Enrollments | GET | `/api/v1/enrollments/{id}` | Get enrollment |
+| Enrollments | DELETE | `/api/v1/enrollments/{id}` | Cancel enrollment (publishes Kafka event) |
+| Claims | POST | `/api/v1/claims` | Create claim (validates enrollment via inter-service call) |
+| Claims | GET | `/api/v1/claims` | List claims (paginated) |
+| Claims | GET | `/api/v1/claims/{id}` | Get claim |
+| Claims | PUT | `/api/v1/claims/{id}` | Update (DRAFT only) |
+| Claims | DELETE | `/api/v1/claims/{id}` | Delete (DRAFT only) |
+| Claims | PATCH | `/api/v1/claims/{id}/submit` | Submit (rate limited) |
+| Documents | POST | `/api/v1/claims/{id}/documents` | Upload file |
+| Documents | GET | `/api/v1/claims/{id}/documents` | List documents |
+| Documents | GET | `/api/v1/claims/{id}/documents/{docId}` | Get metadata |
+| Documents | GET | `/api/v1/claims/{id}/documents/{docId}/download` | Download |
+| Documents | DELETE | `/api/v1/claims/{id}/documents/{docId}` | Delete |
 
 ---
 
 ## Project Structure
 
 ```
-src/main/java/com/flexbenefits/
-├── config/          # Security, JWT filter, MinIO, Redis idempotency
-├── controller/      # 7 REST controllers
-├── dto/             # Request/Response records (validated)
-├── entity/          # JPA entities (7 tables)
-├── exception/       # Global error handling
-├── mapper/          # MapStruct entity↔DTO mappers
-├── repository/      # Spring Data JPA repositories
-└── service/         # Business logic (tenant-scoped)
-
-src/main/resources/
-├── application.properties    # Config with env var support
-└── db/migration/             # Flyway SQL migrations (V1-V4)
-
-src/test/java/com/flexbenefits/
-├── config/TestConfig.java    # Mocks for MinIO + Redis
-└── service/                  # 42 unit tests (Mockito)
+flexbenefits/
+├── benefits-service/          # Tenants, Employees, Plans, Enrollments, Auth, Documents
+│   └── src/main/java/com/flexbenefits/
+│       ├── config/            # Security, JWT, Redis, MinIO, Cache, Idempotency
+│       ├── controller/        # REST controllers + internal API for claims-service
+│       ├── event/             # Kafka event publisher (enrollment events)
+│       ├── dto/               # Request/Response records
+│       ├── entity/            # JPA entities + enums
+│       ├── mapper/            # MapStruct entity-to-DTO mappers
+│       ├── repository/        # Spring Data JPA repositories
+│       └── service/           # Business logic (with @Cacheable)
+│
+├── claims-service/            # Claims lifecycle management
+│   └── src/main/java/com/claimsservice/
+│       ├── client/            # REST client to benefits-service (@Cacheable + circuit breaker)
+│       ├── config/            # Security, JWT, Kafka DLT, Redis cache, cache eviction
+│       ├── event/             # Kafka consumer (auto-rejects claims on enrollment cancel)
+│       ├── controller/        # Claims REST controller
+│       ├── dto/               # Request/Response records
+│       ├── entity/            # Claim entity (references by UUID, no cross-DB FK)
+│       ├── repository/        # Spring Data JPA repository
+│       └── service/           # Claims logic (with custom Micrometer metrics)
+│
+├── eureka-server/             # Netflix Eureka service registry
+├── api-gateway/               # Spring Cloud Gateway (routes to services via Eureka)
+├── prometheus/                # Prometheus scrape configuration
+│   └── prometheus.yml
+├── docker-compose.yml         # 10 containers: 4 services + Postgres + Redis + MinIO + Kafka + Prometheus + Grafana
+├── Dockerfile.*               # Multi-stage builds per service
+└── init-db.sql                # Creates both databases
 ```
-
----
-
-## Testing
-
-```bash
-# Run all 43 tests
-./gradlew test
-
-# View HTML report
-open build/reports/tests/test/index.html
-```
-
-| Test Suite | Tests | Coverage |
-|-----------|-------|----------|
-| ClaimServiceTest | 17 | CRUD + submit + tenant isolation |
-| EnrollmentServiceTest | 11 | Create + cancel + duplicate prevention |
-| BenefitPlanServiceTest | 8 | CRUD + invalid enum + tenant isolation |
-| TenantServiceTest | 5 | Create + duplicate code + uppercase |
-| ApplicationContextTest | 1 | Spring context loads |
 
 ---
 
@@ -225,54 +216,58 @@ open build/reports/tests/test/index.html
 
 | Decision | Why |
 |----------|-----|
-| **Multi-tenant via `tenant_id` column** | Simple, scales well, no schema-per-tenant complexity |
-| **JWT (not sessions)** | Stateless, microservice-ready, carries tenant context |
-| **Flyway (not Hibernate ddl-auto)** | Version-controlled schema, safe for production |
-| **MapStruct (not ModelMapper)** | Compile-time code gen, zero reflection, type-safe |
-| **Records for DTOs** | Immutable, concise, perfect for request/response objects |
-| **Idempotency via Redis** | Sub-ms lookups, atomic SETNX, auto-expiring TTL |
-| **MinIO for files** | S3-compatible API, same code works with AWS S3 |
-| **Multi-stage Docker** | ~200MB image (JRE only), no build tools in prod |
-| **ResourceNotFoundException → 404** | Hides resource existence from other tenants |
+| **Database-per-service** | True data isolation; services can scale independently |
+| **Kafka for enrollment events** | Loose coupling — benefits-service doesn't know about claims-service |
+| **Redis caching + Kafka eviction** | Cache inter-service calls (2-min TTL) + immediate invalidation on status change |
+| **Circuit breaker on REST calls** | Claims-service degrades gracefully when benefits-service is down |
+| **Dead Letter Topic** | Poison messages don't block the Kafka consumer |
+| **JWT with tenant context** | Stateless auth, every request carries tenant identity |
+| **Flyway migrations** | Version-controlled schema, safe for production |
+| **Idempotency via Redis** | Prevents duplicate claim creation on network retries |
+| **Structured JSON logging** | Production-ready for ELK/CloudWatch ingestion |
+| **Custom Micrometer metrics** | Business KPIs: claims created, submitted, processing time |
 
 ---
 
-## Database Schema
+## Observability
 
-```
-tenants (1) ←── (N) employees
-tenants (1) ←── (N) benefit_plans
-tenants (1) ←── (N) users
-
-employees (1) ←── (N) enrollments ──→ (1) benefit_plans
-employees (1) ←── (N) claims ──→ (1) enrollments
-
-claims (1) ←── (N) claim_documents
-```
-
-4 Flyway migrations: `V1` (UUID extension), `V2` (domain tables), `V3` (users), `V4` (documents)
+- **Prometheus** scrapes `/actuator/prometheus` from both services every 15s
+- **Grafana dashboards**: request rate, error rate, p95 latency, JVM memory, custom business metrics
+- **Custom metrics**: `claims.created`, `claims.submitted`, `claims.processing.time`
+- **Structured logging**: JSON in Docker, human-readable in local dev
 
 ---
 
-## Future (Phase 2)
+## Resilience Patterns
 
-- [ ] Microservices split (benefits-service + claims-service)
-- [ ] Kafka for async claim adjudication
-- [ ] Spring Cloud Gateway + Eureka
-- [ ] Resilience4j circuit breakers
-- [ ] Redis caching with Kafka-driven invalidation
-- [ ] Prometheus + Grafana observability
-- [ ] Load testing with k6
+- **Circuit Breaker**: Opens after 50% failure rate (10-call window), 30s recovery
+- **Retry**: 3 attempts with exponential backoff for transient failures
+- **Rate Limiter**: 10 req/sec on claim submission endpoint
+- **Dead Letter Topic**: Failed Kafka messages retry 3x then go to `.DLT`
+
+---
+
+## Testing
+
+```bash
+./gradlew test                    # All tests
+./gradlew :benefits-service:test  # 26 tests
+./gradlew :claims-service:test    # 14 tests
+```
+
+| Suite | Tests | What It Covers |
+|-------|-------|----------------|
+| ClaimServiceTest | 14 | CRUD, submit, tenant isolation, enrollment validation |
+| EnrollmentServiceTest | 11 | Create, cancel, duplicate prevention, Kafka event |
+| BenefitPlanServiceTest | 8 | CRUD, cache, invalid enum, tenant isolation |
+| TenantServiceTest | 5 | Create, duplicate code, uppercase normalization |
 
 ---
 
 ## Author
 
-Built as a portfolio project demonstrating enterprise Spring Boot patterns. Domain: employee benefits administration (7 years industry experience).
-
----
+Built as a portfolio project demonstrating production-grade microservices architecture. Domain: employee benefits administration.
 
 ## License
 
 MIT
-

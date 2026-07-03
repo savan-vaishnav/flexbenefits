@@ -1,0 +1,15 @@
+FROM eclipse-temurin:21-jdk-alpine AS build
+WORKDIR /app
+COPY gradlew gradlew.bat build.gradle gradle.properties ./
+COPY gradle/ gradle/
+COPY eureka-server/ eureka-server/
+RUN echo "rootProject.name = 'flexbenefits'" > settings.gradle && \
+    echo "include 'eureka-server'" >> settings.gradle && \
+    chmod +x gradlew && ./gradlew :eureka-server:bootJar --no-daemon
+
+FROM eclipse-temurin:21-jre-alpine
+RUN apk add --no-cache wget
+WORKDIR /app
+COPY --from=build /app/eureka-server/build/libs/*.jar app.jar
+EXPOSE 8761
+ENTRYPOINT ["java", "-jar", "app.jar"]
