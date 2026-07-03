@@ -1,9 +1,9 @@
 # FlexBenefits
 
-> Multi-tenant employee benefits & claims platform built with **microservices architecture** — Spring Boot 4, Kafka, Redis, Prometheus, Grafana, and 10 Docker containers.
+> Multi-tenant employee benefits & claims platform built with **microservices architecture** — Spring Boot 3.4, Kafka, Redis, Prometheus, Grafana, and 10 Docker containers.
 
 ![Java](https://img.shields.io/badge/Java-21-orange)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-green)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4.1-green)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen)
 
 ---
@@ -62,7 +62,7 @@ A **SaaS backend** where companies manage employee health insurance plans and re
 | Layer | Technology |
 |-------|-----------|
 | **Language** | Java 21 |
-| **Framework** | Spring Boot 4.1, Spring Cloud 2025 |
+| **Framework** | Spring Boot 3.4.1, Spring Cloud 2024.0.0 |
 | **Architecture** | Microservices (2 services + gateway + service registry) |
 | **Service Discovery** | Netflix Eureka |
 | **API Gateway** | Spring Cloud Gateway |
@@ -73,7 +73,7 @@ A **SaaS backend** where companies manage employee health insurance plans and re
 | **Auth** | JWT with tenant-scoped tokens |
 | **File Storage** | MinIO (S3-compatible) |
 | **Observability** | Micrometer + Prometheus + Grafana, structured JSON logging |
-| **API Docs** | SpringDoc OpenAPI 3 (Swagger UI) |
+| **API Docs** | SpringDoc OpenAPI 2.8 (Swagger UI via Gateway aggregation) |
 | **Testing** | JUnit 5, Mockito, AssertJ (42 unit tests) |
 | **Containerization** | Docker multi-stage builds, Docker Compose (10 containers) |
 
@@ -126,10 +126,10 @@ curl -s -X POST http://localhost:8080/api/v1/claims \
 
 | Service | URL |
 |---------|-----|
-| API Gateway | http://localhost:8080 |
-| Eureka Dashboard | http://localhost:8761 |
+| Swagger UI (Gateway) | http://localhost:8080/swagger-ui.html |
 | Swagger UI (benefits) | http://localhost:8082/swagger-ui.html |
 | Swagger UI (claims) | http://localhost:8081/swagger-ui.html |
+| Eureka Dashboard | http://localhost:8761 |
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000 (admin/admin) |
 | MinIO Console | http://localhost:9001 (minioadmin/minioadmin) |
@@ -172,6 +172,7 @@ All traffic goes through the API Gateway on port 8080.
 | Documents | GET | `/api/v1/claims/{id}/documents/{docId}` | Get metadata |
 | Documents | GET | `/api/v1/claims/{id}/documents/{docId}/download` | Download |
 | Documents | DELETE | `/api/v1/claims/{id}/documents/{docId}` | Delete |
+| Health | GET | `/api/v1/ping` | Service health check |
 
 ---
 
@@ -202,7 +203,7 @@ flexbenefits/
 │       └── service/           # Claims logic (with custom Micrometer metrics)
 │
 ├── eureka-server/             # Netflix Eureka service registry
-├── api-gateway/               # Spring Cloud Gateway (routes to services via Eureka)
+├── api-gateway/               # Spring Cloud Gateway (routes + Swagger UI aggregation + CORS)
 ├── prometheus/                # Prometheus scrape configuration
 │   └── prometheus.yml
 ├── docker-compose.yml         # 10 containers: 4 services + Postgres + Redis + MinIO + Kafka + Prometheus + Grafana
@@ -226,6 +227,8 @@ flexbenefits/
 | **Idempotency via Redis** | Prevents duplicate claim creation on network retries |
 | **Structured JSON logging** | Production-ready for ELK/CloudWatch ingestion |
 | **Custom Micrometer metrics** | Business KPIs: claims created, submitted, processing time |
+| **Gateway CORS** | Allows Swagger UI and frontends to call APIs without browser CORS blocks |
+| **Forward headers** | Services respect gateway-forwarded headers for correct URL generation |
 
 ---
 
