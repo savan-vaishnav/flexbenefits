@@ -2,6 +2,7 @@ package com.flexbenefits.exception;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -19,6 +20,13 @@ public class GlobalExceptionHandler {
         log.warn("Resource not found: {}", ex.getMessage());
         return ResponseEntity.status(404)
                 .body(new ErrorResponse(404, ex.getMessage(), Instant.now()));
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException ex) {
+        log.warn("Access denied: {}", ex.getMessage());
+        return ResponseEntity.status(403)
+                .body(new ErrorResponse(403, "Access denied — insufficient permissions", Instant.now()));
     }
 
     @ExceptionHandler(BadCredentialsException.class)
